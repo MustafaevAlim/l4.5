@@ -1,0 +1,114 @@
+Микросервис для обработки заказов: получение из Kafka, хранение в PostgreSQL и быстрый доступ через LRU-кеш. В комплекте есть пример фронтенда на HTML+JS.
+## Возможности
+ - Чтение заказов из Kafka
+ - Сохраняет структуру заказа с платежом, доставкой и товарами
+ - Быстрый in-memory LRU-кеш
+ - HTTP API для получения заказа по ID
+ - Простой веб-интерфейс
+
+## Технологии
+ - Golang
+ - Kafka (segmentio/kafka-go), Kafka UI
+ - PostgreSQL (sqlx)
+ - Docker, Docker Compose
+ - HTML+JS (frontend)
+
+## Быстрый старт
+  ### Клонирование
+    git clone https://github.com/MustafaevAlim/level0.git
+    cd level0
+
+  ### Настрой .env
+Создать .env на основе .env_example и заполнить значения:
+    
+    POSTGRES_USER=postgres
+    POSTGRES_PASSWORD=yourpassword
+    POSTGRES_DB=ordersdb
+    KAFKA_BROKERS=localhost:9092
+    KAFKA_TOPIC=orders-topic
+    KAFKA_GROUP=orders-group
+    CACHE_SIZE=100
+    HTTP_PORT=8082
+
+   ### Запуск через Docker Compose
+    docker compose up --build
+
+Чтобы управлять миграциями локально нужно скачать migrate:
+
+    curl -L https://github.com/golang-migrate/migrate/releases/download/v4.15.2/migrate.linux-amd64.tar.gz \
+    | tar xvz -C /usr/local/bin
+
+Используется makefile:
+
+    make migrate-up # применить миграции
+    make migrate-down # отменить миграции
+    make migrate-version # посмотреть версию миграции
+
+Это поднимет контейнеры с сервисом, Kafka, Kafka UI и PostgreSQL.
+
+Создать топик в кафке (настроить по желанию):
+
+    docker exec -it kafka /bin/bash # войти в контейнер с кафкой 
+    kafka-topics --create --topic orders-topic --bootstrap-server localhost:9092 --partitions 1 --replication-factor 1
+
+
+## HTTP API
+Получить заказ:
+
+    GET /order/{order_uid}
+Пример:
+
+    curl http://localhost:8082/order/OOBmrfkDRphyYFiH
+
+## Статичная HTML-страница
+Открыть /info/ или (при нужной конфигурации) /order.html в браузере, чтобы воспользоваться веб-интерфейсом поиска заказа.
+## Структура проекта
+    ├── cmd/
+    │   └── myapp/          # main.go — точка входа
+    ├── internal/
+    │   ├── config/         # Настройки приложения
+    │   ├── app/            # Жизненный цикл приложения
+    │   ├── api/            # HTTP API и маршруты
+    │   ├── repository/     # Работа с БД, Kafka, Cache
+    │   ├── model/          # модели данных
+    ├── web/                # фронтенд
+    ├── migrations/         # миграции БД
+    ├── scripts/            # скрипты(имитация записи сообщений в кафку)
+    ├── vendor/             # зависимости
+    ├── Dockerfile
+    ├── docker-compose.yml
+    ├── .env.example
+    ├── Makefile
+    └── README.md
+
+
+## Оптимизации
+Сбор профиля показывает такую ситуацию
+```
+(pprof) top20
+Showing nodes accounting for 60ms, 100% of 60ms total
+Showing top 20 nodes out of 51
+      flat  flat%   sum%        cum   cum%
+      10ms 16.67% 16.67%       20ms 33.33%  github.com/jmoiron/sqlx.compileNamedQuery
+      10ms 16.67% 33.33%       10ms 16.67%  internal/runtime/syscall.Syscall6
+      10ms 16.67% 50.00%       10ms 16.67%  runtime.(*gcBitsArena).tryAlloc (inline)
+      10ms 16.67% 66.67%       30ms 50.00%  runtime.findRunnable
+      10ms 16.67% 83.33%       10ms 16.67%  runtime.futex
+      10ms 16.67%   100%       10ms 16.67%  runtime.netpoll
+         0     0%   100%       10ms 16.67%  bufio.(*Writer).Flush
+         0     0%   100%       20ms 33.33%  github.com/jmoiron/sqlx.(*Tx).NamedExecContext
+         0     0%   100%       20ms 33.33%  github.com/jmoiron/sqlx.NamedExecContext
+         0     0%   100%       20ms 33.33%  github.com/jmoiron/sqlx.bindNamedMapper
+         0     0%   100%       20ms 33.33%  github.com/jmoiron/sqlx.bindStruct
+         0     0%   100%       10ms 16.67%  github.com/segmentio/kafka-go.(*Conn).do
+         0     0%   100%       10ms 16.67%  github.com/segmentio/kafka-go.(*Conn).doRequest
+         0     0%   100%       10ms 16.67%  github.com/segmentio/kafka-go.(*Conn).heartbeat
+         0     0%   100%       10ms 16.67%  github.com/segmentio/kafka-go.(*Conn).heartbeat.func1
+         0     0%   100%       10ms 16.67%  github.com/segmentio/kafka-go.(*Conn).writeOperation (inline)
+         0     0%   100%       10ms 16.67%  github.com/segmentio/kafka-go.(*Conn).writeRequest
+         0     0%   100%       10ms 16.67%  github.com/segmentio/kafka-go.(*ConsumerGroup).nextGeneration.(*Generation).heartbeatLoop.func6
+         0     0%   100%       10ms 16.67%  github.com/segmentio/kafka-go.(*Generation).Start.func1
+         0     0%   100%       10ms 16.67%  github.com/segmentio/kafka-go.(*timeoutCoordinator).heartbeat
+(pprof) 
+```
+Видно что `sqlx` занимает 33% времени. Видимо потому что все время компилится маппинг структур, можно заменить на `prepared statements`
